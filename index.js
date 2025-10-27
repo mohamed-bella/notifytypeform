@@ -1,184 +1,138 @@
-import makeWASocket, {
-  DisconnectReason,
-  useMultiFileAuthState,
-  fetchLatestBaileysVersion
-} from '@whiskeysockets/baileys';
 import express from 'express';
 import pino from 'pino';
+import { fetch } from 'node-fetch'; // Standard for Node.js fetch implementation
 
 // --- CONFIGURATION ---
-const PORT = 3000;
-const BOT_SECRET_TOKEN = process.env.BOT_SECRET_TOKEN;
-
-// NEW: The number the bot is linked with (the SENDER)
-const BOT_PHONE_NUMBER_RAW = process.env.BOT_PHONE_NUMBER;
-const BOT_PHONE_NUMBER = BOT_PHONE_NUMBER_RAW ? BOT_PHONE_NUMBER_RAW.trim().replace(/[^0-9]/g, '') : '';
-
-// NEW: The number that receives notifications (the RECEIVER/Admin)
-const ADMIN_RECEIVER_PHONE_NUMBER_RAW = process.env.ADMIN_RECEIVER_PHONE_NUMBER;
-const ADMIN_RECEIVER_PHONE_NUMBER = ADMIN_RECEIVER_PHONE_NUMBER_RAW ? ADMIN_RECEIVER_PHONE_NUMBER_RAW.trim().replace(/[^0-9]/g, '') : '';
+const PORT = 8080; // Bridge runs on a different port than the main bot
+// The URL of your main WhatsApp Bot API endpoint (e.g., /notify-admin)
+const BOT_API_URL = process.env.BOT_API_URL || 'https://notifytypeform-production.up.railway.app/notify-admin'; 
+// The secret token required by the main bot API
+const BOT_SECRET_TOKEN = process.env.BOT_SECRET_TOKEN; 
 // ---------------------
 
-const logger = pino({ level: 'silent' });
-
-let sock;
-let isConnected = false;
-let reconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 5;
-let pairingCodeRequested = false;
-
-async function connectToWhatsApp() {
-  const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
-  const { version } = await fetchLatestBaileysVersion();
-
-  // Check the BOT's phone number, which is required for pairing
-  if (!BOT_PHONE_NUMBER) {
-    console.error('\n' + '='.repeat(50));
-    console.error('ERROR: BOT_PHONE_NUMBER environment variable is not set or is invalid.');
-    console.error('This is the number required for linking the bot.');
-    console.error('='.repeat(50));
-    process.exit(1);
-  }
-  
-  // Check the ADMIN's phone number, which is required for sending
-  if (!ADMIN_RECEIVER_PHONE_NUMBER) {
-    console.warn('\n' + '='.repeat(50));
-    console.warn('WARNING: ADMIN_RECEIVER_PHONE_NUMBER is not set.');
-    console.warn('The bot will connect, but message sending via API will fail.');
-    console.warn('='.repeat(50));
-  }
-
-  sock = makeWASocket({
-    version,
-    logger,
-    auth: state,
-    markOnlineOnConnect: false
-  });
-
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr && !pairingCodeRequested) {
-      pairingCodeRequested = true;
-      
-      console.log('\nRequesting pairing code...');
-      try {
-        // Use BOT_PHONE_NUMBER for pairing
-        const code = await sock.requestPairingCode(BOT_PHONE_NUMBER); 
-        
-        console.log('\n' + '='.repeat(50));
-        console.log('PAIRING CODE:', code);
-        console.log('='.repeat(50));
-        console.log('Enter this code in WhatsApp for bot number:', BOT_PHONE_NUMBER);
-        console.log('1. Open WhatsApp on your phone');
-        // ... (linking instructions remain the same)
-        console.log('5. Enter the pairing code above');
-        console.log('='.repeat(50) + '\n');
-      } catch (error) {
-        console.error('Error requesting pairing code:', error.message);
-        pairingCodeRequested = false;
-      }
-    }
-
-    if (connection === 'close') {
-      pairingCodeRequested = false;
-      const statusCode = lastDisconnect?.error?.output?.statusCode;
-      
-      if (statusCode === DisconnectReason.loggedOut) {
-        console.log('Logged out. Please delete auth_info folder and restart.');
-        isConnected = false;
-        reconnectAttempts = 0;
-      } else if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-        reconnectAttempts++;
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-        console.log(`Connection closed. Reconnecting in ${delay/1000}s (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
-        isConnected = false;
-        setTimeout(() => connectToWhatsApp(), delay);
-      } else {
-        console.log('Max reconnection attempts reached. Please restart the bot.');
-        isConnected = false;
-      }
-    } else if (connection === 'open') {
-      console.log('Connected to WhatsApp successfully!');
-      console.log('Bot Phone Number (Sender):', BOT_PHONE_NUMBER);
-      console.log('Admin Receiver Number (Recipient):', ADMIN_RECEIVER_PHONE_NUMBER || 'NOT SET');
-      isConnected = true;
-      reconnectAttempts = 0;
-    }
-  });
-
-  sock.ev.on('creds.update', saveCreds);
-}
-
+const logger = pino({ level: 'info' });
 const app = express();
-app.use(express.json());
+app.use(express.json()); // Middleware to parse incoming JSON payloads
 
-function authenticateToken(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : authHeader;
+/**
+ * Parses the complex Typeform submission payload into a simple, readable notification string.
+ * @param {object} payload - The raw submission data from Typeform.
+ * @returns {string} The formatted message string.
+ */
+function formatTypeformSubmission(payload) {
+    const submissionId = payload.event_id;
+    const formTitle = payload.form_response?.definition?.title || 'Unknown Form';
+    const submittedAt = new Date(payload.event_time).toLocaleString();
+    
+    let answersSummary = '';
+    const answers = payload.form_response?.answers || [];
 
-  if (!token) {
-    return res.status(401).json({ error: 'Authorization token required' });
-  }
+    // Extract key answers to create a concise summary
+    for (const answer of answers) {
+        const questionText = answer.field.title;
+        let responseValue = '';
 
-  if (token !== BOT_SECRET_TOKEN) {
-    return res.status(403).json({ error: 'Invalid authorization token' });
-  }
+        if (answer.type === 'text' || answer.type === 'email' || answer.type === 'number') {
+            responseValue = answer[answer.type];
+        } else if (answer.type === 'choice') {
+            responseValue = answer.choice.label;
+        } else if (answer.type === 'choices') {
+            responseValue = answer.choices.labels.join(', ');
+        }
+        
+        // Add only non-empty or non-trivial responses to the summary
+        if (responseValue) {
+            answersSummary += `\n- ${questionText}: ${responseValue}`;
+        }
+    }
 
-  next();
+    const message = `
+🔔 New Typeform Submission Received! 🔔
+
+Form: ${formTitle}
+Time: ${submittedAt}
+
+--- Details ---${answersSummary}
+-----------------
+Submission ID: ${submissionId.substring(0, 8)}...
+    `.trim();
+
+    return message;
 }
 
-app.post('/notify-admin', authenticateToken, async (req, res) => {
-  const { message } = req.body;
+/**
+ * Endpoint for Typeform Webhooks to hit.
+ * This is the only URL you need to configure in the Typeform Webhook settings.
+ */
+app.post('/typeform-listener', async (req, res) => {
+    logger.info('Received new request from Typeform webhook.');
+    
+    if (!req.body || !req.body.event_type) {
+        logger.warn('Received invalid payload (not a standard Typeform event).');
+        return res.status(400).send('Invalid Typeform payload.');
+    }
 
-  if (!message || typeof message !== 'string' || message.trim().length === 0) {
-    return res.status(400).json({ error: 'Message must be a non-empty string' });
-  }
+    if (req.body.event_type !== 'form_response') {
+         // Optionally handle other events, but we focus on submissions
+        return res.status(200).send('Event received, but not a form response. Ignoring.');
+    }
 
-  if (message.length > 4096) {
-    return res.status(400).json({ error: 'Message too long (max 4096 characters)' });
-  }
+    // 1. Process and format the message
+    const notificationMessage = formatTypeformSubmission(req.body);
 
-  if (!isConnected || !sock) {
-    return res.status(503).json({ error: 'WhatsApp bot is not connected' });
-  }
-  
-  // Use ADMIN_RECEIVER_PHONE_NUMBER as the target
-  const targetPhone = ADMIN_RECEIVER_PHONE_NUMBER; 
+    if (!BOT_SECRET_TOKEN) {
+        logger.error('BOT_SECRET_TOKEN is missing. Cannot send notification.');
+        return res.status(500).send('Server configuration error.');
+    }
 
-  if (!targetPhone) {
-    return res.status(503).json({ error: 'Admin receiver phone number is not configured' });
-  }
+    try {
+        // 2. Securely forward the formatted message to the main bot API
+        const botResponse = await fetch(BOT_API_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${BOT_SECRET_TOKEN}` 
+            },
+            body: JSON.stringify({
+                message: notificationMessage
+            })
+        });
 
-  try {
-    const jid = `${targetPhone}@s.whatsapp.net`;
-    await sock.sendMessage(jid, { text: message });
-    console.log(`Message sent FROM ${BOT_PHONE_NUMBER} TO ${targetPhone}: ${message}`);
-    res.json({ success: true, message: 'Message sent successfully', phone: targetPhone });
-  } catch (error) {
-    console.error('Error sending message:', error);
-    res.status(500).json({ error: 'Failed to send message', details: error.message });
-  }
+        const botData = await botResponse.json();
+
+        if (botResponse.ok) {
+            logger.info('Notification successfully forwarded and accepted by the main bot.', { phone: botData.phone });
+            // 3. Respond with 200 OK to Typeform (important for Typeform to know it succeeded)
+            res.status(200).json({ status: 'success', forwarded_to: BOT_API_URL });
+        } else {
+            logger.error('Main bot API failed to process the notification.', { status: botResponse.status, error: botData.error });
+            // If the main bot fails (e.g., it's disconnected), we still respond 200 to Typeform 
+            // to prevent repeated retries, but we log the error internally.
+            res.status(502).json({ status: 'error_forwarding', details: botData });
+        }
+
+    } catch (error) {
+        logger.error('Failed to communicate with the main bot API.', error);
+        res.status(500).json({ status: 'internal_error', details: error.message });
+    }
 });
 
-app.get('/status', (req, res) => {
-  res.json({ 
-    connected: isConnected,
-    status: isConnected ? 'online' : 'offline',
-    bot_sender_phone: BOT_PHONE_NUMBER || 'not set',
-    admin_receiver_phone: ADMIN_RECEIVER_PHONE_NUMBER || 'not set'
-  });
+app.get('/health', (req, res) => {
+    res.status(200).json({ 
+        status: 'Bridge running', 
+        target_bot_api: BOT_API_URL, 
+        auth_status: BOT_SECRET_TOKEN ? 'Token set' : 'Token missing'
+    });
 });
 
-// --- INITIALIZATION ---
 
 if (!BOT_SECRET_TOKEN) {
-  console.error('ERROR: BOT_SECRET_TOKEN environment variable is not set');
-  console.error('Please add BOT_SECRET_TOKEN to your environment secrets');
-  process.exit(1);
+    logger.error('CRITICAL: BOT_SECRET_TOKEN environment variable is not set. The bridge cannot authenticate the call to the main bot.');
+    // Do not exit, allow service to start for debugging, but calls will fail.
 }
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Express server running on port ${PORT}`);
-  connectToWhatsApp();
+    logger.info(`Webhook Bridge Server running on port ${PORT}.`);
+    logger.info(`Typeform Webhook URL to use: YOUR_BRIDGE_URL:${PORT}/typeform-listener`);
+    logger.info(`Targeting Main Bot API at: ${BOT_API_URL}`);
 });
