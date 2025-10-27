@@ -1,6 +1,7 @@
 import express from 'express';
 import pino from 'pino';
-import { fetch } from 'node-fetch'; // Standard for Node.js fetch implementation
+// Removed: import { fetch } from 'node-fetch'; 
+// We are now using the native global 'fetch' API available in modern Node.js versions.
 
 // --- CONFIGURATION ---
 const PORT = 8080; // Bridge runs on a different port than the main bot
@@ -87,7 +88,8 @@ app.post('/typeform-listener', async (req, res) => {
 
     try {
         // 2. Securely forward the formatted message to the main bot API
-        const botResponse = await fetch(BOT_API_URL, {
+        // 'fetch' is now the global native function
+        const botResponse = await fetch(BOT_API_URL, { 
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
