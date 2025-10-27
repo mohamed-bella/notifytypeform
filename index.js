@@ -22,7 +22,6 @@ async function connectToWhatsApp() {
   sock = makeWASocket({
     version,
     logger,
-    printQRInTerminal: true,
     auth: state,
     qrTimeout: 60000
   });
