@@ -5,6 +5,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import express from 'express';
 import pino from 'pino';
+import cors from 'cors'; // <-- NEW: Import CORS middleware
 
 // --- CONFIGURATION ---
 const PORT = 3000;
@@ -95,6 +96,17 @@ async function connectToWhatsApp() {
 }
 
 const app = express();
+
+// --- CORS CONFIGURATION ---
+// This middleware allows your form (from any origin) to make requests to this deployed bot server.
+// IMPORTANT SECURITY NOTE: Using { origin: '*' } allows ANY website to post data to this endpoint.
+// For a production deployment, you MUST change '*' to your exact frontend domain (e.g., 'https://www.yourdomain.com').
+app.use(cors({
+    origin: '*',
+    methods: ['POST', 'GET'],
+}));
+// --- END CORS CONFIGURATION ---
+
 app.use(express.json());
 
 // The /notify-admin endpoint is now open and accepts messages from the HTML form.
