@@ -1,14 +1,16 @@
 {
-  "name": "workspace",
+  "name": "whatsapp-bot",
   "version": "1.0.0",
+  "type": "module",
   "main": "index.js",
   "scripts": {
+    "start": "node index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
+  "keywords": ["whatsapp", "bot", "baileys"],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "WhatsApp bot using Baileys and Express for admin notifications",
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc.6",
     "express": "^5.1.0",
