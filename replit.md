@@ -17,6 +17,9 @@ A production-ready WhatsApp bot built with Baileys and Express.js that enables s
   - Added session persistence with useMultiFileAuthState
   - Implemented automatic reconnection logic
   - Added .gitignore for node_modules and auth_info
+  - Added authentication middleware for /notify-admin endpoint security
+  - Implemented input validation (message length, type checking)
+  - Added BOT_SECRET_TOKEN environment variable for API authentication
 
 ## Project Architecture
 
@@ -58,9 +61,20 @@ const ADMIN_NUMBER = '2126XXXXXXXX@s.whatsapp.net';
 3. Bot will save session and stay connected
 
 ### Sending Notifications
+You must include your BOT_SECRET_TOKEN in the Authorization header:
+
 ```bash
 curl -X POST http://localhost:3000/notify-admin \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_BOT_SECRET_TOKEN" \
+  -d '{"message": "Hello from the bot!"}'
+```
+
+Or with the token directly:
+```bash
+curl -X POST http://localhost:3000/notify-admin \
+  -H "Content-Type: application/json" \
+  -H "Authorization: YOUR_BOT_SECRET_TOKEN" \
   -d '{"message": "Hello from the bot!"}'
 ```
 
@@ -71,11 +85,22 @@ curl http://localhost:3000/status
 
 ## Technical Details
 
+### Security
+- **Authentication**: All requests to `/notify-admin` require a valid `BOT_SECRET_TOKEN` in the Authorization header
+- **Input Validation**: 
+  - Messages must be non-empty strings
+  - Maximum message length: 4096 characters
+  - Proper error messages for invalid inputs
+- **Session Security**: WhatsApp session data stored locally in `auth_info` (git-ignored)
+
 ### Dependencies
 - `@whiskeysockets/baileys`: WhatsApp Web API library
 - `express`: HTTP server framework
 - `pino`: Logging (required by Baileys, set to silent)
 - `qrcode-terminal`: QR code display in terminal
+
+### Environment Variables
+- `BOT_SECRET_TOKEN`: Required secret for authenticating API requests
 
 ### Session Persistence
 Sessions are stored in the `./auth_info` folder. To reset authentication:
