@@ -8,7 +8,7 @@ import pino from 'pino';
 
 // --- CONFIGURATION ---
 const PORT = 3000;
-// The BOT_SECRET_TOKEN has been removed, making the API endpoint publicly accessible.
+// Note: Security token authentication is currently disabled for ease of testing.
 
 // HARDCODED VALUES 
 // The number the bot is linked with (the SENDER)
@@ -97,7 +97,7 @@ async function connectToWhatsApp() {
 const app = express();
 app.use(express.json());
 
-// The authentication middleware function is removed.
+// The /notify-admin endpoint is now open and accepts messages from the HTML form.
 app.post('/notify-admin', async (req, res) => {
   const { message } = req.body;
 
@@ -118,6 +118,7 @@ app.post('/notify-admin', async (req, res) => {
 
   try {
     const jid = `${targetPhone}@s.whatsapp.net`;
+    // Send the detailed message text received from the form.
     await sock.sendMessage(jid, { text: message });
     console.log(`Message sent FROM ${BOT_PHONE_NUMBER} TO ${targetPhone}: ${message}`);
     res.json({ success: true, message: 'Message sent successfully', phone: targetPhone });
@@ -137,7 +138,6 @@ app.get('/status', (req, res) => {
 });
 
 // --- INITIALIZATION ---
-// The BOT_SECRET_TOKEN environment check is removed.
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Express server running on port ${PORT}`);
