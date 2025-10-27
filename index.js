@@ -7,7 +7,7 @@ import express from 'express';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
 
-const ADMIN_NUMBER = '2126XXXXXXXX@s.whatsapp.net';
+const ADMIN_NUMBER = '2126704969534@s.whatsapp.net';
 const PORT = 3000;
 const BOT_SECRET_TOKEN = process.env.BOT_SECRET_TOKEN;
 
