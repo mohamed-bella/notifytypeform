@@ -1,14 +1,23 @@
-import makeWASocket, { 
-  DisconnectReason, 
+import makeWASocket, {
+  DisconnectReason,
   useMultiFileAuthState,
   fetchLatestBaileysVersion
 } from '@whiskeysockets/baileys';
 import express from 'express';
 import pino from 'pino';
-import readline from 'readline';
 
+// --- CONFIGURATION ---
 const PORT = 3000;
 const BOT_SECRET_TOKEN = process.env.BOT_SECRET_TOKEN;
+
+// NEW: The number the bot is linked with (the SENDER)
+const BOT_PHONE_NUMBER_RAW = process.env.BOT_PHONE_NUMBER;
+const BOT_PHONE_NUMBER = BOT_PHONE_NUMBER_RAW ? BOT_PHONE_NUMBER_RAW.trim().replace(/[^0-9]/g, '') : '';
+
+// NEW: The number that receives notifications (the RECEIVER/Admin)
+const ADMIN_RECEIVER_PHONE_NUMBER_RAW = process.env.ADMIN_RECEIVER_PHONE_NUMBER;
+const ADMIN_RECEIVER_PHONE_NUMBER = ADMIN_RECEIVER_PHONE_NUMBER_RAW ? ADMIN_RECEIVER_PHONE_NUMBER_RAW.trim().replace(/[^0-9]/g, '') : '';
+// ---------------------
 
 const logger = pino({ level: 'silent' });
 
@@ -16,26 +25,28 @@ let sock;
 let isConnected = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 5;
-let PHONE_NUMBER = '';
 let pairingCodeRequested = false;
-
-function askPhoneNumber() {
-  return new Promise((resolve) => {
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout
-    });
-
-    rl.question('Enter your WhatsApp phone number (with country code, e.g., 212704969534): ', (answer) => {
-      rl.close();
-      resolve(answer.trim().replace(/[^0-9]/g, ''));
-    });
-  });
-}
 
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
   const { version } = await fetchLatestBaileysVersion();
+
+  // Check the BOT's phone number, which is required for pairing
+  if (!BOT_PHONE_NUMBER) {
+    console.error('\n' + '='.repeat(50));
+    console.error('ERROR: BOT_PHONE_NUMBER environment variable is not set or is invalid.');
+    console.error('This is the number required for linking the bot.');
+    console.error('='.repeat(50));
+    process.exit(1);
+  }
+  
+  // Check the ADMIN's phone number, which is required for sending
+  if (!ADMIN_RECEIVER_PHONE_NUMBER) {
+    console.warn('\n' + '='.repeat(50));
+    console.warn('WARNING: ADMIN_RECEIVER_PHONE_NUMBER is not set.');
+    console.warn('The bot will connect, but message sending via API will fail.');
+    console.warn('='.repeat(50));
+  }
 
   sock = makeWASocket({
     version,
@@ -50,25 +61,17 @@ async function connectToWhatsApp() {
     if (qr && !pairingCodeRequested) {
       pairingCodeRequested = true;
       
-      if (!PHONE_NUMBER) {
-        console.log('\n' + '='.repeat(50));
-        console.log('WhatsApp Authentication Required');
-        console.log('='.repeat(50));
-        PHONE_NUMBER = await askPhoneNumber();
-        console.log('Phone number set to:', PHONE_NUMBER);
-      }
-      
       console.log('\nRequesting pairing code...');
       try {
-        const code = await sock.requestPairingCode(PHONE_NUMBER);
+        // Use BOT_PHONE_NUMBER for pairing
+        const code = await sock.requestPairingCode(BOT_PHONE_NUMBER); 
+        
         console.log('\n' + '='.repeat(50));
         console.log('PAIRING CODE:', code);
         console.log('='.repeat(50));
-        console.log('Enter this code in WhatsApp:');
+        console.log('Enter this code in WhatsApp for bot number:', BOT_PHONE_NUMBER);
         console.log('1. Open WhatsApp on your phone');
-        console.log('2. Go to Settings > Linked Devices');
-        console.log('3. Tap "Link a Device"');
-        console.log('4. Tap "Link with phone number instead"');
+        // ... (linking instructions remain the same)
         console.log('5. Enter the pairing code above');
         console.log('='.repeat(50) + '\n');
       } catch (error) {
@@ -97,7 +100,8 @@ async function connectToWhatsApp() {
       }
     } else if (connection === 'open') {
       console.log('Connected to WhatsApp successfully!');
-      console.log('Your phone number:', PHONE_NUMBER);
+      console.log('Bot Phone Number (Sender):', BOT_PHONE_NUMBER);
+      console.log('Admin Receiver Number (Recipient):', ADMIN_RECEIVER_PHONE_NUMBER || 'NOT SET');
       isConnected = true;
       reconnectAttempts = 0;
     }
@@ -127,11 +131,7 @@ function authenticateToken(req, res, next) {
 app.post('/notify-admin', authenticateToken, async (req, res) => {
   const { message } = req.body;
 
-  if (!message) {
-    return res.status(400).json({ error: 'Message field is required' });
-  }
-
-  if (typeof message !== 'string' || message.trim().length === 0) {
+  if (!message || typeof message !== 'string' || message.trim().length === 0) {
     return res.status(400).json({ error: 'Message must be a non-empty string' });
   }
 
@@ -142,16 +142,19 @@ app.post('/notify-admin', authenticateToken, async (req, res) => {
   if (!isConnected || !sock) {
     return res.status(503).json({ error: 'WhatsApp bot is not connected' });
   }
+  
+  // Use ADMIN_RECEIVER_PHONE_NUMBER as the target
+  const targetPhone = ADMIN_RECEIVER_PHONE_NUMBER; 
 
-  if (!PHONE_NUMBER) {
-    return res.status(503).json({ error: 'Phone number not configured' });
+  if (!targetPhone) {
+    return res.status(503).json({ error: 'Admin receiver phone number is not configured' });
   }
 
   try {
-    const jid = `${PHONE_NUMBER}@s.whatsapp.net`;
+    const jid = `${targetPhone}@s.whatsapp.net`;
     await sock.sendMessage(jid, { text: message });
-    console.log(`Message sent to ${PHONE_NUMBER}: ${message}`);
-    res.json({ success: true, message: 'Message sent successfully', phone: PHONE_NUMBER });
+    console.log(`Message sent FROM ${BOT_PHONE_NUMBER} TO ${targetPhone}: ${message}`);
+    res.json({ success: true, message: 'Message sent successfully', phone: targetPhone });
   } catch (error) {
     console.error('Error sending message:', error);
     res.status(500).json({ error: 'Failed to send message', details: error.message });
@@ -162,9 +165,12 @@ app.get('/status', (req, res) => {
   res.json({ 
     connected: isConnected,
     status: isConnected ? 'online' : 'offline',
-    phone: PHONE_NUMBER || 'not set'
+    bot_sender_phone: BOT_PHONE_NUMBER || 'not set',
+    admin_receiver_phone: ADMIN_RECEIVER_PHONE_NUMBER || 'not set'
   });
 });
+
+// --- INITIALIZATION ---
 
 if (!BOT_SECRET_TOKEN) {
   console.error('ERROR: BOT_SECRET_TOKEN environment variable is not set');
